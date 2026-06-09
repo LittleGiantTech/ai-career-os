@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ParkingLotCategory {
+  TOOL
+  FRAMEWORK
+  CONCEPT
+  TECHNOLOGY
+  OTHER
+}
+
+enum SprintTaskType {
+  TASK
+  CHALLENGE
+  KNOWLEDGE_CHECK
+}
+
+enum InterviewStatus {
+  PENDING
+  IN_PROGRESS
+  AWAITING_EVALUATION
+  COMPLETE
+  EXPIRED
+}
+
+enum SessionStatus {
+  ACTIVE
+  PAUSED
+  COMPLETE
+  EXPIRED
+}
+
+enum QuestionType {
+  CONCEPT
+  APPLICATION
+  ARCHITECTURE
+  DEFENSE
+  CONNECTION
+  WEAKNESS_RETEST
+}
+
+enum WeaknessSeverity {
+  CRITICAL
+  SIGNIFICANT
+  FRAGILE
+  PATTERN
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core models
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  clerkId      String    @unique
+  email        String    @unique
+  name         String?
+  currentStage Int       @default(1)
+  streak       Int       @default(0)
+  lastActiveAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sprints            Sprint[]
+  parkingLot         ParkingLotItem[]
+  interviews         Interview[]
+  weaknesses         Weakness[]
+  chapterCompletions ChapterCompletion[]
+}
+
+model Sprint {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Curriculum snapshot — written at startStage time
+  stageKey      String @default("")
+  stageNumber   Int    @default(0)
+  chapterNumber Int    @default(0)
+  title         String
+  goal          String
+  durationDays  Int
+
+  projectTitle       String?
+  projectDescription String?
+  completionCriteria String?
+
+  // Mutable state
+  isActive    Boolean   @default(true)
+  completedAt DateTime?
+
+  // Project submission — chapter-end stages only
+  projectUrl             String?
+  architectureDiagramUrl String?
+  workflowDiagramUrl     String?
+  adrCount               Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks      SprintTask[]
+  interviews Interview[]
+
+  @@unique([userId, stageKey])
+  @@index([userId, isActive])
+  @@index([userId, stageNumber])
+}
+
+model SprintTask {
+  id       String         @id @default(cuid())
+  sprintId String
+  sprint   Sprint         @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+
+  type        SprintTaskType @default(TASK)
+  title       String
+  isComplete  Boolean        @default(false)
+  order       Int            @default(0)
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+
+  @@index([sprintId, type])
+  @@index([sprintId, isComplete])
+}
+
+model ParkingLotItem {
+  id          String             @id @default(cuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  category    ParkingLotCategory @default(TOOL)
+  createdAt   DateTime           @default(now())
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Interview models
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Interview {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sprintId String
+  sprint   Sprint @relation(fields: [sprintId], references: [id], onDelete: Cascade)
+
+  stageNumber        Int
+  chapterNumber      Int
+  isChapterSynthesis Boolean         @default(false)
+  attemptNumber      Int             @default(1)
+
+  status InterviewStatus @default(PENDING)
+
+  startedAt              DateTime?
+  completedAt            DateTime?
+  evaluatedAt            DateTime?
+  reinterviewAvailableAt DateTime?
+
+  // Results
+  totalScore Int?
+  maxScore   Int?
+  percentage Float?
+  passed     Boolean?
+  failReason String?
+
+  evaluationAttempts  Int     @default(0)
+  lastEvaluationError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  questions         InterviewQuestion[]
+  sourceWeaknesses  Weakness[]          @relation("SourceInterview")
+  clearedWeaknesses Weakness[]          @relation("ClearedInterview")
+
+  @@index([userId, stageNumber])
+  @@index([userId, status])
+  @@index([sprintId])
+}
+
+model InterviewQuestion {
+  id          String    @id @default(cuid())
+  interviewId String
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  questionType        QuestionType
+  conceptTested       String
+  questionText        String
+  responseText        String
+  followUpCount       Int          @default(0)
+
+  score               Int
+  confidence          Int          @default(2)
+  weaknessFlagged     Boolean      @default(false)
+  weaknessDescription String?
+  notes               String?
+
+  order            Int
+  isWeaknessRetest Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([interviewId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mastery models
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Weakness {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  stageNumber   Int
+  chapterNumber Int
+  questionType  QuestionType
+  conceptTested String
+  description   String
+
+  initialScore      Int
+  initialConfidence Int              @default(2)
+  severity          WeaknessSeverity
+
+  sourceInterviewId String
+  sourceInterview   Interview @relation("SourceInterview", fields: [sourceInterviewId], references: [id])
+
+  resurfaceCount      Int  @default(0)
+  nextResurfaceStage  Int
+  lastResurfacedStage Int?
+
+  cleared              Boolean   @default(false)
+  clearedAt            DateTime?
+  clearedInInterviewId String?
+  clearedInterview     Interview? @relation("ClearedInterview", fields: [clearedInInterviewId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, cleared])
+  @@index([userId, nextResurfaceStage, cleared])
+}
+
+model ChapterCompletion {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  chapterNumber Int
+
+  synthesisInterviewId String?
+  synthesisScore       Float?
+  synthesisPassedAt    DateTime?
+
+  projectUrl             String?
+  architectureDiagramUrl String?
+  workflowDiagramUrl     String?
+  adrCount               Int      @default(0)
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, chapterNumber])
+}
